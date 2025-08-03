@@ -9,27 +9,31 @@ observe & manage Kafka clusters (topics, consumer groups, brokers, KPIs).
 
 ## 🗂️ Directory Map
 
-| Path                               | Purpose                                           |
-| ---------------------------------- | ------------------------------------------------- |
-| `server.py`                        | Entry-point (`python server.py` or `uvicorn …`)   |
-| `app/api/`                         | **Interface layer** – routers & WebSocket manager |
-| `app/core/`                        | Cross-cutting: config, JWT, RFC-7807 exceptions   |
-| `app/domain/models/`               | Pydantic DTOs (Topic, ConsumerGroup, …)           |
-| `app/domain/services/`             | Business logic (TopicService, …)                  |
-| `app/infra/kafka/`                 | Adapters around `kafka-python`                    |
+| Path                                         | Purpose                                           |
+|----------------------------------------------|---------------------------------------------------|
+| `backend-server/server.py`                   | Entry-point (`python server.py` or `uvicorn …`)   |
+| `backend-server/app/api/`                    | **Interface layer** – routers & WebSocket manager |
+| `backend-server/app/core/`                   | Cross-cutting: config, JWT, RFC-7807 exceptions   |
+| `backend-server/app/domain/models/`          | Pydantic DTOs (Topic, ConsumerGroup, …)           |
+| `backend-server/app/domain/services/`        | Business logic (TopicService, …)                  |
+| `backend-server/app/infra/kafka/`            | Adapters around `kafka-python`                    |
 
 ---
 
 ## ⚙️ How to Run
 
 ```bash
-# dev
-uvicorn server:app --reload               # hot-reload
+cd backend-server
+uvicorn server:app --reload          # dev hot-reload
 # or
-python server.py                          # same but via __main__ guard
+python server.py                     # via __main__ guard
 ````
 
-> Requires Python 3.10+, `pip install -r requirements.txt`.
+> Requires Python 3.10+. Install deps once from repo root:
+>
+> ```bash
+> pip install -r backend-server/requirements.txt
+> ```
 
 Kafka cluster defaults to `localhost:9092`; override via `.env`
 (`KAFKA_ADMIN_BOOTSTRAP_SERVERS`).
