@@ -1,0 +1,101 @@
+# ─── Python byte-code & interpreter artifacts ───────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+
+# ─── Virtual-envs (classic venv / Poetry / pip-env) ─────────────────────
+venv/
+.env/
+.venv/
+# If you keep your venv elsewhere:
+env/
+# Poetry’s local build env
+.poetry/
+
+# ─── Wheel / build / dist output ────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+
+# ─── Packaging & dependency helpers ─────────────────────────────────────
+# pip-tools & pipdeptree
+*.txt~       # backup files people sometimes commit by accident
+pip-wheel-metadata/
+
+# ─── PyInstaller / py2exe / PEX ─────────────────────────────────────────
+*.manifest
+*.spec
+*.pex
+
+# ─── Test & coverage artifacts ─────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+hypothesis/
+.cache/
+
+# ─── Notebook checkpoints ───────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ─── MyPy / Pydantic compiled models ────────────────────────────────────
+.mypy_cache/
+.pyre/
+pydantic_schema_cache/
+
+# ─── Logs & profiler outputs ────────────────────────────────────────────
+*.log
+logs/
+profile.*
+*.prof
+*.lprof
+*.pstats
+*.out
+
+# ─── IDE / Editor metadata ──────────────────────────────────────────────
+# VS Code
+.vscode/
+# PyCharm / IntelliJ
+.idea/
+# Spyder
+.spyderproject
+.spyproject
+# Eclipse / PyDev
+.project
+.pydevproject
+# Sublime
+*.sublime-workspace
+*.sublime-project
+
+# ─── OS-generated cruft ─────────────────────────────────────────────────
+.DS_Store
+Desktop.ini
+Thumbs.db
+ehthumbs.db
+Icon?
+._*
+
+# ─── Docker & Compose local volumes ─────────────────────────────────────
+*.pid
+*.cid
+*.pidfile
+docker-compose.override.yml
+.env.docker
+
+# ─── Docs & site builds (Sphinx, MkDocs, Docusaurus) ────────────────────
+_site/
+build/docs/
+docs/_build/
+# Quarto / Jupyter Book
+_book/
+# mkdocs-material overrides
+*.local.*
