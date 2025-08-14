@@ -1,4 +1,6 @@
 [project]
+name = "kafka_admin_backend"
+version = "0.1.0"
 dependencies = [
   "fastapi>=0.111.0",
   "uvicorn[standard]>=0.29.0",
@@ -8,3 +10,8 @@ dependencies = [
   "python-dotenv>=1.0.1",
   "jmxquery>=0.9.0"
 ]
+
+[tool.uvicorn]
+host = "0.0.0.0"
+port = 8000
+reload = true

@@ -1,17 +1,61 @@
 import React from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { getGroupLag, previewReset, applyReset } from '../api/groups';
-import { Paper, Stack, Typography, TextField, Button, Table, TableHead, TableRow, TableCell, TableBody, Divider, Chip, Box, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
+import {
+  Paper, Stack, Typography, TextField, Button, Table, TableHead, TableRow,
+  TableCell, TableBody, Divider, Chip, Box, MenuItem, Dialog, DialogTitle,
+  DialogContent, DialogActions, Alert, CircularProgress, Autocomplete
+} from '@mui/material';
 import { enqueueSnackbar } from 'notistack';
+import { getGroupLag, previewReset, applyReset, listConsumerGroups } from '../api/groups';
+import { listTopics } from '../api/topics';
 import { toIsoUtcZ, fmtIsoShort } from '../utils/datetime';
 
 export default function Groups() {
+  // ----- selections -----
   const [groupId, setGroupId] = React.useState('demo-group');
+  const [groupInput, setGroupInput] = React.useState('demo-group');
   const [topic, setTopic] = React.useState('demo');
+  const [topicInput, setTopicInput] = React.useState('demo');
+
   const [auto, setAuto] = React.useState(false);
   const [tsLocal, setTsLocal] = React.useState('');
   const [partitionsSel, setPartitionsSel] = React.useState(undefined);
 
+  // ----- options -----
+  const groupsQuery = useQuery({
+    queryKey: ['consumer-groups'],
+    queryFn: () => listConsumerGroups(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const topicsQuery = useQuery({
+    queryKey: ['topics'],
+    queryFn: listTopics,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Normalize group options into simple strings (robust to various backend shapes)
+  const groupOptions = React.useMemo(() => {
+    const raw = groupsQuery.data ?? [];
+    return raw
+      .map((g) => {
+        if (typeof g === 'string') return g;
+        if (g && typeof g === 'object') return g.groupId ?? g.id ?? g.name ?? g[0];
+        if (Array.isArray(g)) return g[0];
+        return undefined;
+      })
+      .filter(Boolean);
+  }, [groupsQuery.data]);
+
+  // Normalize topics to names
+  const topicOptions = React.useMemo(
+    () => (topicsQuery.data ?? []).map((t) => t?.name ?? t).filter(Boolean),
+    [topicsQuery.data]
+  );
+
+  // ----- lag query -----
   const query = useQuery({
     queryKey: ['lag', groupId, topic],
     queryFn: () => getGroupLag(groupId, topic),
@@ -24,6 +68,10 @@ export default function Groups() {
 
   const doPreview = useMutation({
     mutationFn: async () => {
+      if (!tsLocal) {
+        enqueueSnackbar('Please choose a timestamp first', { variant: 'warning' });
+        return;
+      }
       const iso = tsLocal.includes('T') ? toIsoUtcZ(tsLocal) : tsLocal; // also accept raw ISO
       const res = await previewReset(groupId, topic, iso, partitionsSel);
       setPreview(res.targets);
@@ -46,21 +94,92 @@ export default function Groups() {
   const parts = query.data?.partitions ?? [];
   const allPartitionIds = parts.map(p => p.partition);
 
+  const canLoad = Boolean(groupId && topic);
+
   return (
     <Stack spacing={2}>
       <Typography variant="h5">Consumer Groups</Typography>
+
       <Paper sx={{ p:2 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-          <TextField label="Group ID" value={groupId} onChange={e => setGroupId(e.target.value)} size="small" />
-          <TextField label="Topic" value={topic} onChange={e => setTopic(e.target.value)} size="small" />
-          <Button variant="contained" onClick={() => query.refetch()}>Load</Button>
-          <Button variant={auto ? 'contained' : 'outlined'} onClick={() => setAuto(v => !v)}>Auto 10s</Button>
+          {/* Consumer Group (dropdown + free typing) */}
+          <Autocomplete
+            freeSolo
+            options={groupOptions}
+            value={groupId}
+            inputValue={groupInput}
+            onChange={(_, v) => { setGroupId(v || ''); setGroupInput(v || ''); }}
+            onInputChange={(_, v) => setGroupInput(v)}
+            loading={groupsQuery.isFetching}
+            loadingText="Loading groups…"
+            noOptionsText="No groups"
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Group ID"
+                size="small"
+                InputProps={{
+                  ...params.InputProps,
+                  endAdornment: (
+                    <>
+                      {groupsQuery.isFetching ? <CircularProgress size={16} /> : null}
+                      {params.InputProps.endAdornment}
+                    </>
+                  ),
+                }}
+              />
+            )}
+            sx={{ minWidth: 280 }}
+          />
+
+          {/* Topic (dropdown + free typing) */}
+          <Autocomplete
+            freeSolo
+            options={topicOptions}
+            value={topic}
+            inputValue={topicInput}
+            onChange={(_, v) => { setTopic(v || ''); setTopicInput(v || ''); }}
+            onInputChange={(_, v) => setTopicInput(v)}
+            loading={topicsQuery.isFetching}
+            loadingText="Loading topics…"
+            noOptionsText="No topics"
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Topic"
+                size="small"
+                InputProps={{
+                  ...params.InputProps,
+                  endAdornment: (
+                    <>
+                      {topicsQuery.isFetching ? <CircularProgress size={16} /> : null}
+                      {params.InputProps.endAdornment}
+                    </>
+                  ),
+                }}
+              />
+            )}
+            sx={{ minWidth: 280 }}
+          />
+
+          <Button variant="contained" onClick={() => query.refetch()} disabled={!canLoad}>
+            Load
+          </Button>
+          <Button variant={auto ? 'contained' : 'outlined'} onClick={() => setAuto(v => !v)} disabled={!canLoad}>
+            Auto 10s
+          </Button>
         </Stack>
       </Paper>
 
+      {query.isError && (
+        <Alert severity="error">
+          {query.error?.message || 'Failed to load lag data'}
+        </Alert>
+      )}
+
       {query.data && (
         <Paper sx={{ p:2 }}>
-          <Typography variant="subtitle1">Partitions (Lag & Drift)</Typography>
+          <Typography variant="subtitle1">Partitions (Lag &amp; Drift)</Typography>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -78,7 +197,7 @@ export default function Groups() {
                   <TableCell>{p.committedOffset ?? '-'} / {p.endOffset}</TableCell>
                   <TableCell>
                     {p.lag ?? '-'}{' '}
-                    {p.lag ? (
+                    {typeof p.lag === 'number' ? (
                       <Chip
                         size="small"
                         color={p.lag >= 1000 ? 'error' : p.lag > 0 ? 'warning' : 'default'}
@@ -90,6 +209,9 @@ export default function Groups() {
                   <TableCell>{fmtIsoShort(p.lastRecordTimestamp)}</TableCell>
                 </TableRow>
               ))}
+              {!query.isFetching && parts.length === 0 && (
+                <TableRow><TableCell colSpan={5}>No partitions to display.</TableCell></TableRow>
+              )}
             </TableBody>
           </Table>
 
@@ -123,8 +245,12 @@ export default function Groups() {
                   <MenuItem key={id} value={String(id)}>{id}</MenuItem>
                 ))}
               </TextField>
-              <Button variant="outlined" onClick={() => doPreview.mutate()} disabled={!tsLocal || doPreview.isPending}>Preview</Button>
-              <Button variant="contained" color="error" onClick={() => setConfirmOpen(true)} disabled={!preview}>Confirm Apply</Button>
+              <Button variant="outlined" onClick={() => doPreview.mutate()} disabled={!tsLocal || doPreview.isPending}>
+                {doPreview.isPending ? 'Preview…' : 'Preview'}
+              </Button>
+              <Button variant="contained" color="error" onClick={() => setConfirmOpen(true)} disabled={!preview}>
+                Confirm Apply
+              </Button>
             </Stack>
 
             {preview && (
@@ -162,7 +288,9 @@ export default function Groups() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
-          <Button onClick={() => doApply.mutate()} color="error" variant="contained" disabled={!preview || doApply.isPending}>Apply</Button>
+          <Button onClick={() => doApply.mutate()} color="error" variant="contained" disabled={!preview || doApply.isPending}>
+            {doApply.isPending ? 'Applying…' : 'Apply'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Stack>
