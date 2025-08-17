@@ -14,19 +14,61 @@ from app.core.config import settings
 from app.core.errors import install_exception_handlers
 from app.ws.manager import WSManager
 
+# --- NEW: optional monitoring/metrics (all behind flags) ---
+# Routers are imported lazily so the code runs fine even if flags are off.
+from app.services.store import Store  # lightweight; okay to import unconditionally
 
 # Lifespan handler replaces @app.on_event("startup"/"shutdown")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create shared WS manager and start the broadcast loop
     app.state.ws_manager = WSManager()
-    task = asyncio.create_task(app.state.ws_manager.broadcast_cluster_loop())
+    cluster_task = asyncio.create_task(app.state.ws_manager.broadcast_cluster_loop())
+
+    # --- NEW: create the in-memory snapshot store used by /monitoring and /metrics
+    # Keep it always available; empty store is harmless and simplifies code paths.
+    app.state.monitor_store = Store(capacity_per_key=120)
+
+    # --- NEW: optional background monitor task (only if explicitly enabled)
+    monitor_task = None
+    if (
+        settings.monitor_enabled
+        and settings.monitor_groups
+        and settings.monitor_topics
+        and settings.monitor_rest_enabled  # background loop hits /monitoring/*
+    ):
+        import httpx
+
+        async def _monitor_loop():
+            base = (settings.monitor_api_base or "http://127.0.0.1:8000/api/v1").rstrip("/")
+            interval = max(5, int(settings.monitor_interval_sec or 15))
+            while True:
+                try:
+                    async with httpx.AsyncClient(timeout=20.0) as client:
+                        for gid in settings.monitor_groups:
+                            topics = settings.monitor_topics.get(gid, []) or []
+                            for topic in topics:
+                                # Calling our own feature-flagged endpoint will compute & store a sample
+                                await client.get(f"{base}/monitoring/groups/{gid}/snapshot", params={"topic": topic})
+                except Exception:
+                    # Swallow transient errors; next tick will retry
+                    pass
+                await asyncio.sleep(interval)
+
+        monitor_task = asyncio.create_task(_monitor_loop())
+
     try:
         yield
     finally:
-        task.cancel()
+        # Stop cluster loop
+        cluster_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await task
+            await cluster_task
+        # Stop monitor loop if it was started
+        if monitor_task:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
 
 
 app = FastAPI(
@@ -54,12 +96,21 @@ app.add_middleware(
 
 install_exception_handlers(app)
 
-# REST routes
+# REST routes (existing)
 app.include_router(cluster_router.router,  prefix="/api/v1")
 app.include_router(topics_router.router,   prefix="/api/v1")
 app.include_router(cg_router.router,       prefix="/api/v1")
 app.include_router(messages_router.router, prefix="/api/v1")
 
+# --- NEW: optional routers (feature-flagged) ---
+if settings.monitor_rest_enabled:
+    from app.api import group_monitoring as monitoring_router
+    app.include_router(monitoring_router.router, prefix="/api/v1")
+
+if settings.metrics_enabled:
+    from app.api import metrics as metrics_router
+    # metrics lives at /metrics (Prometheus convention)
+    app.include_router(metrics_router.router, prefix="")
 
 # WebSocket route (note: not under /api/v1)
 @app.websocket("/ws/v1/stream")

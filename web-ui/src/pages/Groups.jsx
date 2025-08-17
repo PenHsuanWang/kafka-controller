@@ -3,12 +3,33 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   Paper, Stack, Typography, TextField, Button, Table, TableHead, TableRow,
   TableCell, TableBody, Divider, Chip, Box, MenuItem, Dialog, DialogTitle,
-  DialogContent, DialogActions, Alert, CircularProgress, Autocomplete
+  DialogContent, DialogActions, Alert, CircularProgress, Autocomplete, Tooltip
 } from '@mui/material';
 import { enqueueSnackbar } from 'notistack';
 import { getGroupLag, previewReset, applyReset, listConsumerGroups } from '../api/groups';
 import { listTopics } from '../api/topics';
 import { toIsoUtcZ, fmtIsoShort } from '../utils/datetime';
+
+// -------- helpers (purely presentational) --------
+function deriveDriftSec(p) {
+  // Prefer endOffsetTimestamp if present; fall back to headTimestamp naming if backend varies
+  const endIso = p.endOffsetTimestamp ?? p.endTs ?? p.headTimestamp;
+  const lastIso = p.lastRecordTimestamp;
+  if (!endIso || !lastIso) return null;
+
+  const endMs = Date.parse(endIso);
+  const lastMs = Date.parse(lastIso);
+  if (!Number.isFinite(endMs) || !Number.isFinite(lastMs)) return null;
+
+  return Math.max(0, Math.round((endMs - lastMs) / 1000));
+}
+
+function driftChipColor(sec) {
+  if (sec == null) return 'default';
+  if (sec >= 300) return 'error';   // 5m+
+  if (sec >= 60) return 'warning';  // 1m - 5m
+  return 'default';
+}
 
 export default function Groups() {
   // ----- selections -----
@@ -96,6 +117,19 @@ export default function Groups() {
 
   const canLoad = Boolean(groupId && topic);
 
+  // ---- KPIs (client-side)
+  const totalLag = React.useMemo(() => parts.reduce((a, p) => a + (p.lag ?? 0), 0), [parts]);
+  const maxLagPart = React.useMemo(
+    () => parts.reduce((acc, p) => (acc == null || (p.lag ?? -1) > (acc.lag ?? -1) ? p : acc), null),
+    [parts]
+  );
+  const p95Drift = React.useMemo(() => {
+    const drifts = parts.map(deriveDriftSec).filter((v) => typeof v === 'number').sort((a, b) => a - b);
+    if (drifts.length === 0) return null;
+    const idx = Math.floor(0.95 * (drifts.length - 1));
+    return drifts[idx];
+  }, [parts]);
+
   return (
     <Stack spacing={2}>
       <Typography variant="h5">Consumer Groups</Typography>
@@ -179,38 +213,74 @@ export default function Groups() {
 
       {query.data && (
         <Paper sx={{ p:2 }}>
-          <Typography variant="subtitle1">Partitions (Lag &amp; Drift)</Typography>
+          {/* KPI strip */}
+          <Stack direction="row" spacing={1} sx={{ mb: 1, flexWrap: 'wrap' }}>
+            <Chip label={`Partitions: ${parts.length}`} size="small" />
+            <Chip label={`Total Lag: ${totalLag}`} size="small" color={totalLag > 0 ? (totalLag >= 1000 ? 'error' : 'warning') : 'default'} />
+            {maxLagPart && (
+              <Chip
+                size="small"
+                color={(maxLagPart.lag ?? 0) >= 1000 ? 'error' : (maxLagPart.lag ?? 0) > 0 ? 'warning' : 'default'}
+                label={`Max Lag: ${(maxLagPart.lag ?? 0)} (p${maxLagPart.partition})`}
+              />
+            )}
+            <Chip
+              size="small"
+              color={driftChipColor(p95Drift)}
+              label={`Drift P95: ${p95Drift == null ? '-' : `${p95Drift}s`}`}
+            />
+            {query.isFetching && <Chip size="small" label="Refreshing…" />}
+          </Stack>
+
+          <Typography variant="subtitle1" sx={{ mb: 1 }}>Partitions (Lag &amp; Drift)</Typography>
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>#</TableCell>
                 <TableCell>Committed / End</TableCell>
                 <TableCell>Lag</TableCell>
+                <TableCell>Drift (s)</TableCell>
                 <TableCell>End TS</TableCell>
                 <TableCell>LastRec TS</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {parts.map(p => (
-                <TableRow key={p.partition}>
-                  <TableCell>{p.partition}</TableCell>
-                  <TableCell>{p.committedOffset ?? '-'} / {p.endOffset}</TableCell>
-                  <TableCell>
-                    {p.lag ?? '-'}{' '}
-                    {typeof p.lag === 'number' ? (
-                      <Chip
-                        size="small"
-                        color={p.lag >= 1000 ? 'error' : p.lag > 0 ? 'warning' : 'default'}
-                        label={p.lag >= 1000 ? 'high' : p.lag > 0 ? 'low' : 'ok'}
-                      />
-                    ) : null}
-                  </TableCell>
-                  <TableCell>{fmtIsoShort(p.endOffsetTimestamp)}</TableCell>
-                  <TableCell>{fmtIsoShort(p.lastRecordTimestamp)}</TableCell>
-                </TableRow>
-              ))}
+              {parts.map(p => {
+                const drift = deriveDriftSec(p);
+                return (
+                  <TableRow key={p.partition}>
+                    <TableCell>{p.partition}</TableCell>
+                    <TableCell>{p.committedOffset ?? '-'} / {p.endOffset}</TableCell>
+                    <TableCell>
+                      {p.lag ?? '-'}{' '}
+                      {typeof p.lag === 'number' ? (
+                        <Chip
+                          size="small"
+                          color={p.lag >= 1000 ? 'error' : p.lag > 0 ? 'warning' : 'default'}
+                          label={p.lag >= 1000 ? 'high' : p.lag > 0 ? 'low' : 'ok'}
+                        />
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      <Tooltip title={drift == null ? '' : 'Difference between End TS and LastRec TS'}>
+                        <span>
+                          {drift == null ? '-' : (
+                            <Chip
+                              size="small"
+                              color={driftChipColor(drift)}
+                              label={`${drift}s`}
+                            />
+                          )}
+                        </span>
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell>{fmtIsoShort(p.endOffsetTimestamp)}</TableCell>
+                    <TableCell>{fmtIsoShort(p.lastRecordTimestamp)}</TableCell>
+                  </TableRow>
+                );
+              })}
               {!query.isFetching && parts.length === 0 && (
-                <TableRow><TableCell colSpan={5}>No partitions to display.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6}>No partitions to display.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
