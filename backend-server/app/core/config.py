@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, field_validator
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -32,5 +32,20 @@ class Settings(BaseSettings):
 
     # WS
     ws_cluster_tick: float = 2.0
+
+    # Allow overriding CORS at runtime:
+    cors_allow_origins: list[str] | None = None
+    # Accept either JSON array (e.g. '["http://localhost:3000"]')
+    # or comma-separated string (e.g. 'http://localhost:3000,http://127.0.0.1:3000')
+    @field_validator("cors_allow_origins", mode="before")
+    def _parse_cors_origins(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                return json.loads(v)  # JSON array
+            except Exception:
+                return [s.strip() for s in v.split(",") if s.strip()]
+        return v
 
 settings = Settings()

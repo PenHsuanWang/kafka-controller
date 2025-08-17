@@ -10,6 +10,7 @@ from app.api import cluster as cluster_router
 from app.api import topics as topics_router
 from app.api import consumer_groups as cg_router
 from app.api import messages as messages_router
+from app.core.config import settings
 from app.core.errors import install_exception_handlers
 from app.ws.manager import WSManager
 
@@ -28,12 +29,25 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="Kafka Admin API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Kafka Admin API",
+    version="1.0.0",
+    lifespan=lifespan,
+    # Put OpenAPI/docs under /api/v1 for consistency with your REST prefix
+    openapi_url="/api/v1/openapi.json",
+    docs_url="/api/v1/docs",
+    redoc_url="/api/v1/redoc",
+)
 
-# CORS for local dev; tighten in prod
+# --- CORS: allow web-ui during development (configurable via settings.cors_allow_origins) ---
+allow_origins = settings.cors_allow_origins or [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
