@@ -1,6 +1,9 @@
 # server.py
+from __future__ import annotations
+
 import asyncio
 import contextlib
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -14,44 +17,54 @@ from app.core.config import settings
 from app.core.errors import install_exception_handlers
 from app.ws.manager import WSManager
 
-# --- NEW: optional monitoring/metrics (all behind flags) ---
-# Routers are imported lazily so the code runs fine even if flags are off.
-from app.services.store import Store  # lightweight; okay to import unconditionally
+# Import the monitoring router we just implemented
+from app.api import monitoring as monitoring_router
 
-# Lifespan handler replaces @app.on_event("startup"/"shutdown")
+# The store class is created inside monitoring.py; we just use the instance hanging off app.state
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create shared WS manager and start the broadcast loop
+    # WebSocket manager (existing)
     app.state.ws_manager = WSManager()
     cluster_task = asyncio.create_task(app.state.ws_manager.broadcast_cluster_loop())
 
-    # --- NEW: create the in-memory snapshot store used by /monitoring and /metrics
-    # Keep it always available; empty store is harmless and simplifies code paths.
-    app.state.monitor_store = Store(capacity_per_key=120)
+    # In-memory monitoring store
+    # (created in monitoring.get_store if absent, but we create it eagerly here)
+    from app.api.monitoring import MonitorStore  # local import to avoid circulars
+    app.state.monitor_store = MonitorStore(capacity_per_key=600)
 
-    # --- NEW: optional background monitor task (only if explicitly enabled)
+    # Kafka bootstrap (used by monitoring snapshot endpoint)
+    app.state.kafka_bootstrap = (
+        getattr(settings, "kafka_bootstrap", None)
+        or os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+        or "localhost:9092"
+    )
+
     monitor_task = None
     if (
-        settings.monitor_enabled
-        and settings.monitor_groups
-        and settings.monitor_topics
-        and settings.monitor_rest_enabled  # background loop hits /monitoring/*
+        getattr(settings, "monitor_enabled", True)
+        and getattr(settings, "monitor_rest_enabled", True)
+        and getattr(settings, "monitor_groups", None)
+        and getattr(settings, "monitor_topics", None)
     ):
         import httpx
 
         async def _monitor_loop():
-            base = (settings.monitor_api_base or "http://127.0.0.1:8000/api/v1").rstrip("/")
-            interval = max(5, int(settings.monitor_interval_sec or 15))
+            base = (getattr(settings, "monitor_api_base", None) or "http://127.0.0.1:8000/api/v1").rstrip("/")
+            interval = max(5, int(getattr(settings, "monitor_interval_sec", 15)))
             while True:
                 try:
                     async with httpx.AsyncClient(timeout=20.0) as client:
                         for gid in settings.monitor_groups:
                             topics = settings.monitor_topics.get(gid, []) or []
                             for topic in topics:
-                                # Calling our own feature-flagged endpoint will compute & store a sample
-                                await client.get(f"{base}/monitoring/groups/{gid}/snapshot", params={"topic": topic})
+                                await client.get(
+                                    f"{base}/monitoring/groups/{gid}/snapshot",
+                                    params={"topic": topic},
+                                )
                 except Exception:
-                    # Swallow transient errors; next tick will retry
+                    # Swallow errors to keep the loop alive (you'll still see 5xx in server logs)
                     pass
                 await asyncio.sleep(interval)
 
@@ -60,11 +73,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Stop cluster loop
         cluster_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cluster_task
-        # Stop monitor loop if it was started
         if monitor_task:
             monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -75,13 +86,12 @@ app = FastAPI(
     title="Kafka Admin API",
     version="1.0.0",
     lifespan=lifespan,
-    # Put OpenAPI/docs under /api/v1 for consistency with your REST prefix
     openapi_url="/api/v1/openapi.json",
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc",
 )
 
-# --- CORS: allow web-ui during development (configurable via settings.cors_allow_origins) ---
+# CORS
 allow_origins = settings.cors_allow_origins or [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -96,29 +106,21 @@ app.add_middleware(
 
 install_exception_handlers(app)
 
-# REST routes (existing)
+# Existing routes
 app.include_router(cluster_router.router,  prefix="/api/v1")
 app.include_router(topics_router.router,   prefix="/api/v1")
 app.include_router(cg_router.router,       prefix="/api/v1")
 app.include_router(messages_router.router, prefix="/api/v1")
 
-# --- NEW: optional routers (feature-flagged) ---
-if settings.monitor_rest_enabled:
-    from app.api import group_monitoring as monitoring_router
-    app.include_router(monitoring_router.router, prefix="/api/v1")
+# Monitoring routes
+app.include_router(monitoring_router.router, prefix="/api/v1")
 
-if settings.metrics_enabled:
-    from app.api import metrics as metrics_router
-    # metrics lives at /metrics (Prometheus convention)
-    app.include_router(metrics_router.router, prefix="")
 
-# WebSocket route (note: not under /api/v1)
 @app.websocket("/ws/v1/stream")
 async def ws_stream(ws: WebSocket):
     ws_manager: WSManager = app.state.ws_manager
     await ws_manager.connect(ws)
     try:
-        # No inbound messages yet; keep connection open
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:

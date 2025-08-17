@@ -10,6 +10,7 @@ import Settings from './pages/Settings';
 import Landing from './pages/Landing';
 import Audit from './pages/Audit';
 import Requests from './pages/Requests';
+import Monitoring from './pages/Monitoring';
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/topics" element={<TopicsList />} />
         <Route path="/topics/:topic" element={<TopicDetail />} />
         <Route path="/messages" element={<Messages />} />
+        <Route path="/monitoring" element={<Monitoring />} />
         <Route path="/landing" element={<Landing />} />
         <Route path="/audit" element={<Audit />} />
         <Route path="/requests" element={<Requests />} />

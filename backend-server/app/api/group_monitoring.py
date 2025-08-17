@@ -1,8 +1,11 @@
+# app/api/group_monitoring.py
 from __future__ import annotations
 import datetime as dt
 from typing import Optional
+
 import httpx
 from fastapi import APIRouter, Request, Query
+
 from app.core.config import settings
 from app.services.store import Store
 from app.models.monitoring import (
@@ -11,27 +14,33 @@ from app.models.monitoring import (
 
 router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 
+
 def _iso_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
 
 def _seconds_between(a_iso: Optional[str], b_iso: Optional[str]) -> Optional[int]:
     if not a_iso or not b_iso:
         return None
     try:
-        a = dt.datetime.fromisoformat(a_iso.replace("Z","+00:00"))
-        b = dt.datetime.fromisoformat(b_iso.replace("Z","+00:00"))
+        a = dt.datetime.fromisoformat(a_iso.replace("Z", "+00:00"))
+        b = dt.datetime.fromisoformat(b_iso.replace("Z", "+00:00"))
         return int((a - b).total_seconds())
     except Exception:
         return None
 
+
 async def _fetch_group_lag_via_http(group_id: str, topic: str) -> dict:
-    # Calls your existing endpoint: /api/v1/consumer-groups/{groupId}/lag?topic=...
-    base = settings.monitor_api_base.rstrip("/")
+    """
+    Calls your existing endpoint: /api/v1/consumer-groups/{groupId}/lag?topic=...
+    """
+    base = (settings.monitor_api_base or "http://127.0.0.1:8000/api/v1").rstrip("/")
     url = f"{base}/consumer-groups/{group_id}/lag"
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.get(url, params={"topic": topic})
         r.raise_for_status()
         return r.json()
+
 
 @router.get("/groups/{group_id}/snapshot", response_model=GroupSnapshot)
 async def get_snapshot(request: Request, group_id: str, topic: str = Query(...)):
@@ -40,7 +49,7 @@ async def get_snapshot(request: Request, group_id: str, topic: str = Query(...))
     parts_raw = raw.get("partitions") or []
 
     # 2) normalize & enrich with time-lag
-    parts = []
+    parts: list[GroupPartitionSnapshot] = []
     for p in parts_raw:
         end_ts = p.get("endOffsetTimestamp") or p.get("endTs") or p.get("headTimestamp")
         last_ts = p.get("lastRecordTimestamp")
@@ -69,6 +78,7 @@ async def get_snapshot(request: Request, group_id: str, topic: str = Query(...))
         timeLagP95Sec=p95,
         partitions=len(parts),
     )
+
     snap = GroupSnapshot(
         groupId=group_id,
         topic=topic,
@@ -78,14 +88,20 @@ async def get_snapshot(request: Request, group_id: str, topic: str = Query(...))
     )
 
     # 4) store for rate calculations
-    store: Store = request.app.state.monitor_store  # created in lifespan (see below)
-    store.put(snap)
+    store: Store = request.app.state.monitor_store  # created in lifespan
+    store.put_snapshot(group_id, topic, snap)
     return snap
 
+
 @router.get("/groups/{group_id}/rates", response_model=GroupRates)
-async def get_rates(request: Request, group_id: str, topic: str = Query(...), windowSec: float = Query(60.0, ge=1, le=600)):
+async def get_rates(
+    request: Request,
+    group_id: str,
+    topic: str = Query(...),
+    windowSec: float = Query(60.0, ge=1, le=600),
+):
     store: Store = request.app.state.monitor_store
-    prev, curr = store.two_points(group_id, topic, windowSec)
+    prev, curr = store.get_two_snapshots(group_id, topic, windowSec)
     rates = GroupRates(groupId=group_id, topic=topic, windowSec=windowSec)
 
     if not prev or not curr:

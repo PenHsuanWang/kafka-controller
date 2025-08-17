@@ -4,6 +4,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import GroupsIcon from '@mui/icons-material/Groups';
 import TopicIcon from '@mui/icons-material/Topic';
 import MessageIcon from '@mui/icons-material/Message';
+import ShowChartIcon from '@mui/icons-material/ShowChart';  // <-- NEW
 import StorageIcon from '@mui/icons-material/Storage';
 import PolicyIcon from '@mui/icons-material/Policy';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
@@ -15,6 +16,7 @@ const items = [
   { to: '/groups', label: 'Groups', icon: <GroupsIcon /> },
   { to: '/topics', label: 'Topics', icon: <TopicIcon /> },
   { to: '/messages', label: 'Messages', icon: <MessageIcon /> },
+  { to: '/monitoring', label: 'Monitoring', icon: <ShowChartIcon /> }, // <-- NEW
   { to: '/landing', label: 'Landing', icon: <StorageIcon /> },
   { to: '/audit', label: 'Audit', icon: <PolicyIcon /> },
   { to: '/requests', label: 'Requests', icon: <VerifiedUserIcon /> },
@@ -27,7 +29,11 @@ export default function Sidebar() {
     <>
       <List>
         {items.map((it) => (
-          <ListItemButton key={it.to} selected={loc.pathname === it.to} onClick={() => nav(it.to)}>
+          <ListItemButton
+            key={it.to}
+            selected={loc.pathname === it.to}
+            onClick={() => nav(it.to)}
+          >
             <ListItemIcon>{it.icon}</ListItemIcon>
             <ListItemText primary={it.label} />
           </ListItemButton>
