@@ -2,16 +2,16 @@ import React from 'react';
 import {
   Paper, Stack, Typography, TextField, Button, RadioGroup,
   FormControlLabel, Radio, Table, TableHead, TableRow, TableCell, TableBody, Alert,
-  Autocomplete, CircularProgress, MenuItem
+  Autocomplete, CircularProgress, MenuItem, Divider, Chip
 } from '@mui/material';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { getByOffset, getFromTimestamp } from '../api/messages';
 import { listTopics, getTopic } from '../api/topics';
 import { toIsoUtcZ } from '../utils/datetime';
 import { b64ToUtf8 } from '../utils/base64';
+import HeatStrip from '../components/HeatStrip';
 
 function decodeMaybeB64(row, b64Field, rawField) {
-  // Prefer explicit base64 fields; fallback to raw fields for backward compatibility
   const b64 = row[b64Field];
   if (b64 != null) return b64ToUtf8(b64) ?? '(binary)';
   const raw = row[rawField];
@@ -21,18 +21,34 @@ function decodeMaybeB64(row, b64Field, rawField) {
   return '(binary)';
 }
 
+// Safely get epoch ms from either timestampIso or timestamp (ms or ISO)
+function getTsMs(r) {
+  if (r.timestampIso) {
+    const ms = Date.parse(r.timestampIso);
+    return Number.isFinite(ms) ? ms : undefined;
+  }
+  if (typeof r.timestamp === 'number') return r.timestamp;
+  if (typeof r.timestamp === 'string') {
+    const ms = Date.parse(r.timestamp);
+    return Number.isFinite(ms) ? ms : undefined;
+  }
+  return undefined;
+}
+
 export default function Messages() {
   // ---- form state
-  const [topic, setTopic] = React.useState('');     // string topic name from dropdown
-  const [partition, setPartition] = React.useState(''); // string for UI; convert to number on fetch
+  const [topic, setTopic] = React.useState('');
+  const [partition, setPartition] = React.useState('');
   const [mode, setMode] = React.useState('offset');
   const [offset, setOffset] = React.useState(0);
   const [ts, setTs] = React.useState('');
   const [limit, setLimit] = React.useState(50);
+  const [bins, setBins] = React.useState(60);
+
   const [rows, setRows] = React.useState([]);
   const [error, setError] = React.useState(null);
 
-  // ---- topics list for dropdown
+  // ---- topics list
   const topicsQ = useQuery({
     queryKey: ['topics', 'all'],
     queryFn: () => listTopics(),
@@ -43,7 +59,7 @@ export default function Messages() {
   // reset partition when topic changes
   React.useEffect(() => { setPartition(''); }, [topic]);
 
-  // ---- topic detail to get partitions for selected topic
+  // ---- topic details (partitions)
   const topicDetailQ = useQuery({
     queryKey: ['topic-detail', topic],
     queryFn: () => getTopic(topic),
@@ -52,11 +68,8 @@ export default function Messages() {
   });
   const partitions = topicDetailQ.data?.partitions?.map(p => p.id) ?? [];
 
-  // choose a default partition when available
   React.useEffect(() => {
-    if (!partition && partitions.length > 0) {
-      setPartition(String(partitions[0]));
-    }
+    if (!partition && partitions.length > 0) setPartition(String(partitions[0]));
   }, [partitions, partition]);
 
   // ---- manual fetch
@@ -65,7 +78,6 @@ export default function Messages() {
       setError(null);
       if (!topic) throw new Error('Topic is required');
       if (partition === '') throw new Error('Partition is required');
-
       const pnum = Number(partition);
       const lim = Number(limit) || 50;
 
@@ -82,13 +94,18 @@ export default function Messages() {
     onError: (e) => setError(e.message || String(e)),
   });
 
+  const timestampsMs = React.useMemo(
+    () => rows.map(getTsMs).filter((v) => Number.isFinite(v)),
+    [rows]
+  );
+
   return (
     <Stack spacing={2}>
       <Typography variant="h5">Messages</Typography>
 
       <Paper sx={{ p:2 }}>
+        {/* Top row: topic / partition / limit / bins */}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
-          {/* Topic dropdown (string options) */}
           <Autocomplete
             options={topicNames}
             value={topic || null}
@@ -114,7 +131,6 @@ export default function Messages() {
             )}
           />
 
-          {/* Partition dropdown (based on selected topic) */}
           <TextField
             select
             size="small"
@@ -130,7 +146,6 @@ export default function Messages() {
             ))}
           </TextField>
 
-          {/* Limit */}
           <TextField
             label="Limit"
             size="small"
@@ -140,13 +155,26 @@ export default function Messages() {
             sx={{ width: 120 }}
             inputProps={{ min: 1, max: 1000 }}
           />
+
+          <TextField
+            label="Bins"
+            size="small"
+            type="number"
+            value={bins}
+            onChange={(e) => setBins(Math.max(5, Number(e.target.value) || 60))}
+            sx={{ width: 120 }}
+            helperText="Time buckets"
+            inputProps={{ min: 5, max: 500 }}
+          />
         </Stack>
 
+        {/* Mode row */}
         <RadioGroup row value={mode} onChange={(e) => setMode(e.target.value)}>
           <FormControlLabel value="offset" control={<Radio />} label="By Offset" />
           <FormControlLabel value="timestamp" control={<Radio />} label="By Timestamp" />
         </RadioGroup>
 
+        {/* Offset or Timestamp input */}
         {mode === 'offset' ? (
           <TextField
             label="Offset"
@@ -183,7 +211,15 @@ export default function Messages() {
         )}
       </Paper>
 
+      {/* Heat map strip (only when we have timestamps) */}
       <Paper sx={{ p:2 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="subtitle1">Event frequency</Typography>
+          <Chip size="small" label={`${timestampsMs.length}`} />
+        </Stack>
+        <HeatStrip timestampsMs={timestampsMs} bins={bins} height={22} />
+        <Divider sx={{ my: 2 }} />
+        {/* Table below as before */}
         <Table size="small">
           <TableHead>
             <TableRow>
