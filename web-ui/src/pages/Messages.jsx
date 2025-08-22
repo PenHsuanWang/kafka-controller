@@ -66,7 +66,7 @@ export default function Messages() {
     enabled: !!topic,
     staleTime: 10_000,
   });
-  const partitions = topicDetailQ.data?.partitions?.map(p => p.id) ?? [];
+  const partitions = (topicDetailQ.data?.partitions?.map(p => p.id) ?? []).sort((a, b) => a - b);
 
   React.useEffect(() => {
     if (!partition && partitions.length > 0) setPartition(String(partitions[0]));
@@ -85,7 +85,7 @@ export default function Messages() {
         const res = await getByOffset(topic, pnum, Number(offset) || 0, lim);
         setRows(res || []);
       } else {
-        const iso = ts && ts.includes('T') ? toIsoUtcZ(ts) : ts;
+        const iso = toIsoUtcZ(ts); // normalize whether 'Z', offset, or local-naive
         if (!iso) throw new Error('Timestamp is required in timestamp mode');
         const res = await getFromTimestamp(topic, pnum, iso, lim);
         setRows(res || []);
@@ -98,6 +98,12 @@ export default function Messages() {
     () => rows.map(getTsMs).filter((v) => Number.isFinite(v)),
     [rows]
   );
+
+  const fetchDisabled =
+    fetcher.isPending ||
+    !topic ||
+    partition === '' ||
+    (mode === 'timestamp' && !ts);
 
   return (
     <Stack spacing={2}>
@@ -151,7 +157,10 @@ export default function Messages() {
             size="small"
             type="number"
             value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
+            onChange={(e) => {
+              const v = e.target.value;
+              setLimit(v === '' ? '' : Number(v));
+            }}
             sx={{ width: 120 }}
             inputProps={{ min: 1, max: 1000 }}
           />
@@ -161,7 +170,11 @@ export default function Messages() {
             size="small"
             type="number"
             value={bins}
-            onChange={(e) => setBins(Math.max(5, Number(e.target.value) || 60))}
+            onChange={(e) => {
+              const v = e.target.value;
+              const n = v === '' ? '' : Number(v);
+              setBins(n === '' ? 60 : Math.max(5, n || 60));
+            }}
             sx={{ width: 120 }}
             helperText="Time buckets"
             inputProps={{ min: 5, max: 500 }}
@@ -181,7 +194,10 @@ export default function Messages() {
             size="small"
             type="number"
             value={offset}
-            onChange={e => setOffset(Number(e.target.value))}
+            onChange={e => {
+              const v = e.target.value;
+              setOffset(v === '' ? '' : Number(v));
+            }}
             sx={{ width: 220 }}
             helperText="Start reading at this offset"
           />
@@ -199,7 +215,11 @@ export default function Messages() {
         )}
 
         <Stack sx={{ mt:2 }}>
-          <Button variant="contained" onClick={() => fetcher.mutate()} disabled={fetcher.isPending}>
+          <Button
+            variant="contained"
+            onClick={() => fetcher.mutate()}
+            disabled={fetchDisabled}
+          >
             {fetcher.isPending ? 'Loading…' : 'Fetch'}
           </Button>
         </Stack>
@@ -207,6 +227,16 @@ export default function Messages() {
         {error && (
           <Alert severity="error" sx={{ mt:2 }}>
             {error}
+          </Alert>
+        )}
+        {topicsQ.error && (
+          <Alert severity="error" sx={{ mt:2 }}>
+            Failed to load topics: {String(topicsQ.error?.message ?? topicsQ.error)}
+          </Alert>
+        )}
+        {topicDetailQ.error && (
+          <Alert severity="error" sx={{ mt:2 }}>
+            Failed to load partitions: {String(topicDetailQ.error?.message ?? topicDetailQ.error)}
           </Alert>
         )}
       </Paper>
@@ -219,7 +249,7 @@ export default function Messages() {
         </Stack>
         <HeatStrip timestampsMs={timestampsMs} bins={bins} height={22} />
         <Divider sx={{ my: 2 }} />
-        {/* Table below as before */}
+        {/* Table below */}
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -237,9 +267,34 @@ export default function Messages() {
                 <TableCell>{i + 1}</TableCell>
                 <TableCell>{r.partition}</TableCell>
                 <TableCell>{r.offset}</TableCell>
-                <TableCell>{r.timestampIso ?? (r.timestamp ? new Date(r.timestamp).toISOString() : '')}</TableCell>
-                <TableCell>{decodeMaybeB64(r, 'keyB64', 'key')}</TableCell>
-                <TableCell>{decodeMaybeB64(r, 'valueB64', 'value')}</TableCell>
+                <TableCell>
+                  {(() => {
+                    const ms = getTsMs(r);
+                    return Number.isFinite(ms) ? new Date(ms).toISOString() : '';
+                  })()}
+                </TableCell>
+                <TableCell
+                  sx={{
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    whiteSpace: 'pre',
+                    maxWidth: 360,
+                    overflowX: 'auto'
+                  }}
+                  title={decodeMaybeB64(r, 'keyB64', 'key')}
+                >
+                  {decodeMaybeB64(r, 'keyB64', 'key')}
+                </TableCell>
+                <TableCell
+                  sx={{
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    whiteSpace: 'pre',
+                    maxWidth: 720,
+                    overflowX: 'auto'
+                  }}
+                  title={decodeMaybeB64(r, 'valueB64', 'value')}
+                >
+                  {decodeMaybeB64(r, 'valueB64', 'value')}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
