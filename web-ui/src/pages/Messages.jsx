@@ -1,23 +1,36 @@
+// src/pages/Messages.jsx
 import React from 'react';
 import {
   Paper, Stack, Typography, TextField, Button, RadioGroup,
   FormControlLabel, Radio, Table, TableHead, TableRow, TableCell, TableBody, Alert,
-  Autocomplete, CircularProgress, MenuItem, Divider, Chip
+  Autocomplete, CircularProgress, MenuItem, Divider, Chip, Tooltip, ToggleButton, ToggleButtonGroup
 } from '@mui/material';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { getByOffset, getFromTimestamp } from '../api/messages';
 import { listTopics, getTopic } from '../api/topics';
 import { toIsoUtcZ } from '../utils/datetime';
-import { b64ToUtf8 } from '../utils/base64';
+import { safeDecodeBase64Utf8 as b64ToUtf8 } from '../utils/base64';
 import HeatStrip from '../components/HeatStrip';
+
+function prettyMaybeJson(text) {
+  if (typeof text === 'string') {
+    const t = text.trim();
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try { return JSON.stringify(JSON.parse(t), null, 2); } catch { /* ignore */ }
+    }
+  }
+  return text;
+}
 
 function decodeMaybeB64(row, b64Field, rawField) {
   const b64 = row[b64Field];
-  if (b64 != null) return b64ToUtf8(b64) ?? '(binary)';
-  const raw = row[rawField];
-  if (typeof raw === 'string') {
-    try { return b64ToUtf8(raw) ?? raw; } catch { return raw; }
+  if (b64 != null && b64 !== '') {
+    const s = b64ToUtf8(b64);
+    return s ?? '(binary)';
   }
+  const raw = row[rawField];
+  if (raw == null) return '';
+  if (typeof raw === 'string' || typeof raw === 'number') return String(raw);
   return '(binary)';
 }
 
@@ -44,6 +57,7 @@ export default function Messages() {
   const [ts, setTs] = React.useState('');
   const [limit, setLimit] = React.useState(50);
   const [bins, setBins] = React.useState(60);
+  const [sortDir, setSortDir] = React.useState('asc'); // 'asc' | 'desc'
 
   const [rows, setRows] = React.useState([]);
   const [error, setError] = React.useState(null);
@@ -85,7 +99,7 @@ export default function Messages() {
         const res = await getByOffset(topic, pnum, Number(offset) || 0, lim);
         setRows(res || []);
       } else {
-        const iso = toIsoUtcZ(ts); // normalize whether 'Z', offset, or local-naive
+        const iso = toIsoUtcZ(ts);
         if (!iso) throw new Error('Timestamp is required in timestamp mode');
         const res = await getFromTimestamp(topic, pnum, iso, lim);
         setRows(res || []);
@@ -98,6 +112,19 @@ export default function Messages() {
     () => rows.map(getTsMs).filter((v) => Number.isFinite(v)),
     [rows]
   );
+
+  // Sorted view of rows by offset
+  const sortedRows = React.useMemo(() => {
+    if (!rows || rows.length === 0) return [];
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const ao = Number(a.offset);
+      const bo = Number(b.offset);
+      if (!Number.isFinite(ao) || !Number.isFinite(bo)) return 0;
+      return sortDir === 'asc' ? ao - bo : bo - ao;
+    });
+    return copy;
+  }, [rows, sortDir]);
 
   const fetchDisabled =
     fetcher.isPending ||
@@ -249,54 +276,81 @@ export default function Messages() {
         </Stack>
         <HeatStrip timestampsMs={timestampsMs} bins={bins} height={22} />
         <Divider sx={{ my: 2 }} />
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="body2">Sort by offset:</Typography>
+          <ToggleButtonGroup
+            value={sortDir}
+            exclusive
+            size="small"
+            onChange={(e, v) => { if (v) setSortDir(v); }}
+            aria-label="Sort by offset"
+          >
+            <ToggleButton value="asc" aria-label="ascending">↑</ToggleButton>
+            <ToggleButton value="desc" aria-label="descending">↓</ToggleButton>
+          </ToggleButtonGroup>
+        </Stack>
         {/* Table below */}
         <Table size="small">
           <TableHead>
             <TableRow>
               <TableCell>#</TableCell>
               <TableCell>Partition</TableCell>
-              <TableCell>Offset</TableCell>
+              <TableCell>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <span>Offset</span>
+                  <Typography variant="caption" component="span" sx={{ opacity: 0.6 }}>
+                    {sortDir === 'asc' ? '↑' : '↓'}
+                  </Typography>
+                </Stack>
+              </TableCell>
               <TableCell>Timestamp</TableCell>
               <TableCell>Key</TableCell>
               <TableCell>Value (utf-8 preview)</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((r, i) => (
-              <TableRow key={`${r.partition}-${r.offset}-${i}`}>
-                <TableCell>{i + 1}</TableCell>
-                <TableCell>{r.partition}</TableCell>
-                <TableCell>{r.offset}</TableCell>
-                <TableCell>
-                  {(() => {
-                    const ms = getTsMs(r);
-                    return Number.isFinite(ms) ? new Date(ms).toISOString() : '';
-                  })()}
-                </TableCell>
-                <TableCell
-                  sx={{
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                    whiteSpace: 'pre',
-                    maxWidth: 360,
-                    overflowX: 'auto'
-                  }}
-                  title={decodeMaybeB64(r, 'keyB64', 'key')}
-                >
-                  {decodeMaybeB64(r, 'keyB64', 'key')}
-                </TableCell>
-                <TableCell
-                  sx={{
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                    whiteSpace: 'pre',
-                    maxWidth: 720,
-                    overflowX: 'auto'
-                  }}
-                  title={decodeMaybeB64(r, 'valueB64', 'value')}
-                >
-                  {decodeMaybeB64(r, 'valueB64', 'value')}
-                </TableCell>
-              </TableRow>
-            ))}
+            {sortedRows.map((r, i) => {
+              const keyText = decodeMaybeB64(r, 'keyB64', 'key');
+              const valText = decodeMaybeB64(r, 'valueB64', 'value');
+              const prettyVal = prettyMaybeJson(valText);
+              return (
+                <TableRow key={`${r.partition}-${r.offset}-${i}`}>
+                  <TableCell>{i + 1}</TableCell>
+                  <TableCell>{r.partition}</TableCell>
+                  <TableCell>{r.offset}</TableCell>
+                  <TableCell>
+                    {(() => {
+                      const ms = getTsMs(r);
+                      return Number.isFinite(ms) ? new Date(ms).toISOString() : '';
+                    })()}
+                  </TableCell>
+                  <TableCell
+                    sx={{
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      whiteSpace: 'pre',
+                      maxWidth: 360,
+                      overflowX: 'auto'
+                    }}
+                  >
+                    <Tooltip title={String(keyText)} placement="top" enterDelay={500}>
+                      <span>{keyText}</span>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell
+                    sx={{
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      whiteSpace: 'pre',
+                      maxWidth: 720,
+                      overflowX: 'auto'
+                    }}
+                  >
+                    <Tooltip title={String(valText)} placement="top" enterDelay={500}>
+                      <span>{prettyVal}</span>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </Paper>
